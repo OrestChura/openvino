@@ -135,7 +135,7 @@ if(THREADING MATCHES "^(TBB|TBB_AUTO)$" AND
         # TBBROOT is not defined if ENV{TBBROOT} is not found
         # so, we have to deduce this value ourselves
         if(NOT DEFINED TBBROOT AND DEFINED ENV{TBBROOT})
-            file(TO_CMAKE_PATH $ENV{TBBROOT} TBBROOT)
+            file(TO_CMAKE_PATH "$ENV{TBBROOT}" TBBROOT)
         endif()
         if(NOT DEFINED TBBROOT)
             get_target_property(_tbb_include_dir TBB::tbb INTERFACE_INCLUDE_DIRECTORIES)
