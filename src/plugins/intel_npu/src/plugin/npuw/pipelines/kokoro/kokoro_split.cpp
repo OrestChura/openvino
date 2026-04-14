@@ -16,6 +16,7 @@
 #include "openvino/op/parameter.hpp"
 #include "openvino/op/result.hpp"
 #include "openvino/op/util/node_util.hpp"
+#include "openvino/pass/serialize.hpp"
 
 namespace ov::npuw {
 
@@ -294,6 +295,31 @@ std::shared_ptr<ov::Model> ov::npuw::KokoroSplit::create_model_b(const std::shar
     // Validate nodes to propagate shapes from new parameters
     model_b->validate_nodes_and_infer_types();
     return model_b;
+}
+
+void KokoroSplit::serialize_model_a(const std::shared_ptr<ov::Model>& model_a, const std::string& output_dir) {
+    OPENVINO_ASSERT(model_a, "model_a is null, cannot serialize");
+    const auto xml_path = output_dir + "/kokoro_model_a.xml";
+    const auto bin_path = output_dir + "/kokoro_model_a.bin";
+
+    LOG_DEBUG("Kokoro Model A inputs:");
+    for (const auto& param : model_a->get_parameters()) {
+        LOG_DEBUG("  " << param->get_friendly_name() << " : " << param->get_output_element_type(0) << " "
+                       << param->get_output_partial_shape(0));
+    }
+
+    LOG_DEBUG("Serializing Kokoro Model A to " << xml_path);
+    ov::pass::Serialize serialize_pass(xml_path, bin_path);
+    serialize_pass.run_on_model(model_a);
+}
+
+void KokoroSplit::serialize_model_b(const std::shared_ptr<ov::Model>& model_b, const std::string& output_dir) {
+    OPENVINO_ASSERT(model_b, "model_b is null, cannot serialize");
+    const auto xml_path = output_dir + "/kokoro_model_b.xml";
+    const auto bin_path = output_dir + "/kokoro_model_b.bin";
+    LOG_DEBUG("Serializing Kokoro Model B to " << xml_path);
+    ov::pass::Serialize serialize_pass(xml_path, bin_path);
+    serialize_pass.run_on_model(model_b);
 }
 
 }  // namespace ov::npuw

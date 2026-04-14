@@ -234,6 +234,14 @@ void ov::npuw::KokoroInferRequest::infer() {
     if (m_a_text_mask.get_node()) {
         fill_text_mask();
     }
+
+    // Dump Model A inputs
+    LOG_DEBUG("Kokoro Model A inputs:");
+    for (const auto& a_in : m_model_a_request->get_compiled_model()->inputs()) {
+        auto tensor = m_model_a_request->get_tensor(a_in);
+        LOG_DEBUG("  " << a_in.get_any_name() << " : " << a_in.get_element_type() << " " << tensor->get_shape());
+    }
+
     m_model_a_request->infer();
 
     const auto pred_dur_tensor = m_model_a_request->get_tensor(m_a_pred_dur);

@@ -89,6 +89,9 @@ ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Mod
     // Decompose kokoro model into two static models
     KokoroSplitResult split_result = KokoroSplit::split_model(model, m_kokoro_cfg);
 
+    // KokoroSplit::serialize_model_a(split_result.model_a, "D:\\sshum\\npuw-repo\\samples\\kokoro\\split");
+    // KokoroSplit::serialize_model_b(split_result.model_b, "D:\\sshum\\npuw-repo\\samples\\kokoro\\split");
+
     // Guard aten::angle Divide(0,0)->NaN in Model B before NPUW partitioning
     ov::npuw::kokoro::guard_angle_divide(split_result.model_b);
 

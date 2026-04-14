@@ -10,6 +10,7 @@
 
 #include "kokoro_compiled_model.hpp"
 #include "openvino/core/model.hpp"
+#include "openvino/pass/serialize.hpp"
 
 namespace ov {
 class Node;
@@ -21,6 +22,9 @@ namespace npuw {
 class KokoroSplit {
 public:
     static KokoroSplitResult split_model(const std::shared_ptr<ov::Model>& model, const KokoroConfig& config);
+
+    static void serialize_model_a(const std::shared_ptr<ov::Model>& model_a, const std::string& output_dir);
+    static void serialize_model_b(const std::shared_ptr<ov::Model>& model_b, const std::string& output_dir);
 
 private:
     // Create model A - up to pred_dur output
