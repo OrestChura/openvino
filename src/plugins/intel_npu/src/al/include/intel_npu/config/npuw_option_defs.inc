@@ -39,6 +39,7 @@ INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_CACHE_DIR, std::string, "", ov::intel_npu::npuw, 
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_FUNCALL_ASYNC, bool, false, ov::intel_npu::npuw, funcall_async, "NPUW_FUNCALL_ASYNC", ROOT, EXPOSED, CACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_UNFOLD_IREQS, bool, false, ov::intel_npu::npuw, unfold_ireqs, "NPUW_UNFOLD_IREQS", ROOT, EXPOSED, CACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_FALLBACK_EXEC, bool, true, ov::intel_npu::npuw, fallback_exec, "NPUW_FALLBACK_EXEC", ROOT, EXPOSED, CACHED, ALL)
+INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_CPU_INFERENCE_PRECISION, std::string, "", ov::intel_npu::npuw, cpu_inference_precision, "NPUW_CPU_INFERENCE_PRECISION", ROOT, EXPOSED, CACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_ACC_CHECK, bool, false, ov::intel_npu::npuw::accuracy, check, "NPUW_ACC_CHECK", ROOT, HIDDEN, UNCACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_ACC_THRESH, double, 0.01, ov::intel_npu::npuw::accuracy, threshold, "NPUW_ACC_THRESH", ROOT, HIDDEN, UNCACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_ACC_DEVICE, std::string, "", ov::intel_npu::npuw::accuracy, reference_device, "NPUW_ACC_DEVICE", ROOT, HIDDEN, UNCACHED, ALL)

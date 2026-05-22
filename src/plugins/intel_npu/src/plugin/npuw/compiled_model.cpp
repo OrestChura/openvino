@@ -221,6 +221,13 @@ ov::npuw::DeviceProperties get_properties_per_device(const std::shared_ptr<const
     auto core = plugin->get_core();
     auto device_names = ov::DeviceIDParser::get_hetero_devices(device_priorities);
     DeviceProperties device_properties;
+
+    // translate NPUW_CPU_INFERENCE_PRECISION to INFERENCE_PRECISION_HINT
+    // and apply to the CPU device only.
+    // The CPU plugin on newer hosts auto-enables BF16, which can degrade
+    // precision-sensitive submodels (e.g. Kokoro vocoder / iSTFT).
+    const auto cpu_prec_it = properties.find("NPUW_CPU_INFERENCE_PRECISION");
+
     for (const auto& device_name : device_names) {
         auto properties_it = device_properties.find(device_name);
         if (device_properties.end() == properties_it) {
@@ -234,6 +241,16 @@ ov::npuw::DeviceProperties get_properties_per_device(const std::shared_ptr<const
                     }
                 }
             }  // if(NPU)
+
+            // Extra handling for the private CPU options
+            if (device_name == "CPU") {
+                if (cpu_prec_it != properties.end()) {
+                    const auto value = cpu_prec_it->second.as<std::string>();
+                    if (!value.empty()) {
+                        device_properties[device_name][ov::hint::inference_precision.name()] = value;
+                    }
+                }
+            }  // if(CPU)
         }
     }
     return device_properties;

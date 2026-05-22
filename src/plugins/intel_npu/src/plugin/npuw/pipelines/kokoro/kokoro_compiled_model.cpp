@@ -60,6 +60,13 @@ ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Mod
     split_kokoro_properties(properties, common_props, npuw_kokoro_props);
     common_props["NPUW_FALLBACK_EXEC"] = "NO";
 
+    // Kokoro's vocoder/iSTFT subgraphs are precision-sensitive: on host CPUs
+    // that default to BF16 inference audio quality degrades audibly.
+    // Therefore, pin CPU subgraphs to FP32 by default.
+    if (!common_props.count("NPUW_CPU_INFERENCE_PRECISION")) {
+        common_props["NPUW_CPU_INFERENCE_PRECISION"] = "f32";
+    }
+
     m_cfg.parseEnvVars();
     m_cfg.update(any_copy(npuw_kokoro_props));
 
