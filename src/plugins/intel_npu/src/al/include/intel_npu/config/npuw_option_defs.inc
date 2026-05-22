@@ -85,3 +85,7 @@ INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_TEXT_EMBED, bool, false, ov::intel_npu::npuw::tex
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO, bool, false, ov::intel_npu::npuw::kokoro, enabled, "NPUW_KOKORO", KOKORO, EXPOSED, UNCACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO_BLOCK_SIZE, uint64_t, 200, ov::intel_npu::npuw::kokoro, block_size, "NPUW_KOKORO_BLOCK_SIZE", KOKORO, EXPOSED, UNCACHED, ALL)
 INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO_OVERLAP_SIZE, uint64_t, 20, ov::intel_npu::npuw::kokoro, overlap_size, "NPUW_KOKORO_OVERLAP_SIZE", KOKORO, EXPOSED, UNCACHED, ALL)
+INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO_DEV_A, std::string, "", ov::intel_npu::npuw::kokoro, dev_a, "NPUW_KOKORO_DEV_A", KOKORO, EXPOSED, UNCACHED, ALL)
+INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO_DEV_B, std::string, "", ov::intel_npu::npuw::kokoro, dev_b, "NPUW_KOKORO_DEV_B", KOKORO, EXPOSED, UNCACHED, ALL)
+INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO_PIPELINE_A, std::string, "NONE", ov::intel_npu::npuw::kokoro, pipeline_a, "NPUW_KOKORO_PIPELINE_A", KOKORO, EXPOSED, UNCACHED, ALL)
+INTEL_NPU_NPUW_SIMPLE_OPT(NPUW_KOKORO_PIPELINE_B, std::string, "NONE", ov::intel_npu::npuw::kokoro, pipeline_b, "NPUW_KOKORO_PIPELINE_B", KOKORO, EXPOSED, UNCACHED, ALL)

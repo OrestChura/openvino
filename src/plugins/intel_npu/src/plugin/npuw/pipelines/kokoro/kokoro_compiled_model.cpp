@@ -80,26 +80,39 @@ ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Mod
     // Guard aten::angle Divide(0,0)->NaN in Model B before NPUW partitioning
     ov::npuw::kokoro::guard_angle_divide(split_result.model_b);
 
+    // Debug overrides (defaults: pipeline = "NONE", dev = "" meaning "inherit").
+    const auto pipeline_a = m_cfg.get<::intel_npu::NPUW_KOKORO_PIPELINE_A>();
+    const auto pipeline_b = m_cfg.get<::intel_npu::NPUW_KOKORO_PIPELINE_B>();
+    const auto dev_a = m_cfg.get<::intel_npu::NPUW_KOKORO_DEV_A>();
+    const auto dev_b = m_cfg.get<::intel_npu::NPUW_KOKORO_DEV_B>();
+
     LOG_DEBUG("Compiling kokoro model A...");
     // Model A (BERT + LSTMs + duration predictor) — compile through NPUW
     // so that NPUW_CACHE_DIR caching works for both models.
-    // NONE pipeline keeps it as a single subgraph (no partitioning overhead).
+    // NONE pipeline keeps it as a single subgraph (no partitioning overhead);
+    // override via NPUW_KOKORO_PIPELINE_A to enable bisection / accuracy checks.
     ov::AnyMap properties_model_a = common_props;
-    properties_model_a["NPUW_ONLINE_PIPELINE"] = "NONE";
+    properties_model_a["NPUW_ONLINE_PIPELINE"] = pipeline_a;
+    if (!dev_a.empty()) {
+        LOG_DEBUG("Kokoro debug: overriding model A NPUW_DEVICES with '" << dev_a << "'");
+        properties_model_a["NPUW_DEVICES"] = dev_a;
+    }
     m_model_a_compiled = std::dynamic_pointer_cast<ov::npuw::ICompiledModel>(
         ov::npuw::ICompiledModel::create(split_result.model_a, plugin, properties_model_a));
 
     LOG_DEBUG("Compiling kokoro model B...");
     ov::AnyMap properties_model_b = common_props;
 
-    // Enforce offloading to CPU for non-accurate subgraphs
-    if (!properties_model_b.count("NPUW_ONLINE_PIPELINE")) {
-        // Long compilation time, but best performance
-        properties_model_b["NPUW_ONLINE_PIPELINE"] = "NONE";
-    }
+    // Enforce offloading to CPU for non-accurate subgraphs.
+    // NONE pipeline by default; override via NPUW_KOKORO_PIPELINE_B for bisection.
+    properties_model_b["NPUW_ONLINE_PIPELINE"] = pipeline_b;
     if (!properties_model_b.count("NPUW_ONLINE_AVOID")) {
         properties_model_b["NPUW_ONLINE_AVOID"] = "P:FloorModFP32/NPU,P:CumSumSinGen/NPU,"
                                                   "P:BoxMullerNoise/NPU,P:AngleComplex/NPU";
+    }
+    if (!dev_b.empty()) {
+        LOG_DEBUG("Kokoro debug: overriding model B NPUW_DEVICES with '" << dev_b << "'");
+        properties_model_b["NPUW_DEVICES"] = dev_b;
     }
     m_model_b_compiled = std::dynamic_pointer_cast<ov::npuw::ICompiledModel>(
         ov::npuw::ICompiledModel::create(split_result.model_b, plugin, properties_model_b));
