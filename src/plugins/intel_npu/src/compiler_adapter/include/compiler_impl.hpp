@@ -19,9 +19,8 @@ namespace intel_npu {
 
 class VCLCompilerImpl final : public std::enable_shared_from_this<VCLCompilerImpl> {
 public:
-    VCLCompilerImpl();
+    VCLCompilerImpl(const std::string& library_dir);
     ~VCLCompilerImpl();
-    static const std::shared_ptr<VCLCompilerImpl> getInstance();
 
     /**
      * @brief Transforms a network from the OpenVINO model representation to a format executable
@@ -29,9 +28,11 @@ public:
      * @param model a shared pointer to the OpenVINO model to be compiled
      * @param config a reference to NPUConfig containing plugin config options
      *        including config options related to compilation
-     * @return an ov::Tensor object containing the blob of the compiled model
+     * @return a pair containing an ov::Tensor object with the compiled model (blob) and an optional
+     *         string with runtime requirements for the blob
      */
-    ov::Tensor compile(const std::shared_ptr<const ov::Model>& model, const FilteredConfig& config) const;
+    std::pair<ov::Tensor, std::optional<std::string>> compile(const std::shared_ptr<const ov::Model>& model,
+                                                              const FilteredConfig& config) const;
 
     /**
      * @brief Compiles the model, weights separation enabled. All init schedules along with the main one are compiled in
@@ -84,19 +85,33 @@ public:
      */
     bool get_supported_options(std::vector<char>& options) const;
 
-    bool is_option_supported(std::string option, std::optional<std::string> optValue = std::nullopt) const;
+    bool is_option_supported(const std::string& option,
+                             const std::optional<std::string>& optValue = std::nullopt) const;
+
+    /**
+     * @brief Checks whether the given option and value are supported by the compiler for the specified device.
+     * This overload is used when a device descriptor is available, allowing device-specific validation.
+     * @param in_device_desc Pointer to a device descriptor containing the device ID, number of
+     * tiles and stepping information used for device-specific checks
+     * @param option The option name to check
+     * @param optValue The option value to validate
+     * @return true if the option and value are supported for the given device, false otherwise
+     */
+    bool is_option_supported(vcl_device_desc_t* in_device_desc,
+                             const std::string& option,
+                             const std::optional<std::string>& optValue = std::nullopt) const;
 
     std::shared_ptr<void> getLinkedLibrary() const;
 
 private:
     /**
-     * @brief Compiles the given model according to the given configuration. During the model serialization step, the
-     * "WeightlessCacheAttribute" may be stored within the serialized model if requested.
+     * @brief Compiles the given model according to the given configuration. During the model serialization step,
+     * the "WeightlessCacheAttribute" may be stored within the serialized model if requested.
      * @note Storing the "WeightlessCacheAttribute" is necessary if the "weights separation" flow is being used.
      */
-    ov::Tensor compile(const std::shared_ptr<const ov::Model>& model,
-                       const FilteredConfig& config,
-                       const bool storeWeightlessCacheAttributeFlag) const;
+    std::pair<ov::Tensor, std::optional<std::string>> compile(const std::shared_ptr<const ov::Model>& model,
+                                                              const FilteredConfig& config,
+                                                              const bool storeWeightlessCacheAttributeFlag) const;
 
     vcl_log_handle_t _logHandle = nullptr;
     vcl_compiler_handle_t _compilerHandle = nullptr;
