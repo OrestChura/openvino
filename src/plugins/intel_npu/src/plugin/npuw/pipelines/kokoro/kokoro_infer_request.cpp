@@ -42,6 +42,64 @@ void throw_if_missing(const std::vector<std::string>& missing_ports) {
     }
 }
 
+std::string shape_to_string(const ov::Shape& shape) {
+    std::stringstream ss;
+    ss << "[";
+    for (std::size_t i = 0; i < shape.size(); ++i) {
+        if (i) {
+            ss << ",";
+        }
+        ss << shape[i];
+    }
+    ss << "]";
+    return ss.str();
+}
+
+std::string format_ports(const std::vector<ov::Output<const ov::Node>>& ports) {
+    std::stringstream ss;
+    ss << "[";
+    for (std::size_t i = 0; i < ports.size(); ++i) {
+        if (i) {
+            ss << ", ";
+        }
+        const auto& port = ports[i];
+        const auto name = safe_any_name(port);
+        ss << (name.empty() ? "<unnamed>" : name) << ":" << port.get_element_type().get_type_name() << port.get_partial_shape();
+    }
+    ss << "]";
+    return ss.str();
+}
+
+template <typename T>
+std::string summarize_duration_values(const T* data, std::size_t count) {
+    constexpr std::size_t max_preview_values = 16;
+    const std::size_t preview_values = std::min(count, max_preview_values);
+    std::int64_t raw_sum = 0;
+    std::size_t positive_sum = 0;
+
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto value = static_cast<std::int64_t>(data[i]);
+        raw_sum += value;
+        if (value > 0) {
+            positive_sum += static_cast<std::size_t>(value);
+        }
+    }
+
+    std::stringstream ss;
+    ss << "count=" << count << ", raw_sum=" << raw_sum << ", positive_sum=" << positive_sum << ", first_values=[";
+    for (std::size_t i = 0; i < preview_values; ++i) {
+        if (i) {
+            ss << ",";
+        }
+        ss << static_cast<std::int64_t>(data[i]);
+    }
+    if (preview_values < count) {
+        ss << ",...";
+    }
+    ss << "]";
+    return ss.str();
+}
+
 /**
  * @brief Gathers elements from the last dimension of a 3D tensor based on provided indices.
  *
@@ -245,27 +303,41 @@ void ov::npuw::KokoroInferRequest::infer() {
     //    Only use the first m_real_seq_len entries (real tokens before padding).
     const std::size_t full_len = pred_dur_tensor->get_size();
     const std::size_t l_max = (m_real_seq_len > 0 && m_real_seq_len <= full_len) ? m_real_seq_len : full_len;
+    const auto pred_dur_shape = pred_dur_tensor->get_shape();
 
     std::vector<int64_t> pred;
     pred.resize(l_max);
 
     const auto et = pred_dur_tensor->get_element_type();
+    std::string valid_before_zero_summary;
+    std::string full_before_zero_summary;
+    std::string full_after_zero_summary;
     if (et == ov::element::i64) {
-        const auto* p = pred_dur_tensor->data<const int64_t>();
+        auto* p = pred_dur_tensor->data<int64_t>();
         std::copy_n(p, l_max, pred.data());
+        valid_before_zero_summary = summarize_duration_values(p, l_max);
+        full_before_zero_summary = summarize_duration_values(p, full_len);
+        ov::npuw::kokoro::zero_padding_durations(p, full_len, l_max);
+        full_after_zero_summary = summarize_duration_values(p, full_len);
     } else if (et == ov::element::i32) {
-        const auto* p = pred_dur_tensor->data<const int32_t>();
+        auto* p = pred_dur_tensor->data<int32_t>();
         std::copy_n(p, l_max, pred.data());
+        valid_before_zero_summary = summarize_duration_values(p, l_max);
+        full_before_zero_summary = summarize_duration_values(p, full_len);
+        ov::npuw::kokoro::zero_padding_durations(p, full_len, l_max);
+        full_after_zero_summary = summarize_duration_values(p, full_len);
     } else {
         OPENVINO_THROW("Unexpected element type from pred_dur data, expected i64 or i32, got: ", et.get_type_name());
     }
 
-    // Zero out padding positions in pred_dur so they don't contribute to audio.
-    if (et == ov::element::i64) {
-        ov::npuw::kokoro::zero_padding_durations(pred_dur_tensor->data<int64_t>(), full_len, l_max);
-    } else {
-        ov::npuw::kokoro::zero_padding_durations(pred_dur_tensor->data<int32_t>(), full_len, l_max);
-    }
+    LOG_INFO("Kokoro Model A pred_dur diagnostics: port="
+             << (safe_any_name(m_a_pred_dur).empty() ? "<unnamed>" : safe_any_name(m_a_pred_dur))
+             << ", tensor_shape=" << shape_to_string(pred_dur_shape) << ", element_type=" << et.get_type_name()
+             << ", full_len=" << full_len << ", real_seq_len=" << m_real_seq_len << ", l_max=" << l_max
+             << ", valid_before_zero={" << valid_before_zero_summary << "}, full_before_zero={"
+             << full_before_zero_summary << "}, full_after_zero={" << full_after_zero_summary << "}, model_a_outputs="
+             << format_ports(m_model_a_request->get_compiled_model()->outputs()));
+
     auto orig_pred_dur = ov::npuw::util::find_port_by_name(original_outputs, "pred_dur");
     set_tensor(orig_pred_dur.value(), pred_dur_tensor);
 
@@ -275,7 +347,23 @@ void ov::npuw::KokoroInferRequest::infer() {
             total_frames += static_cast<std::size_t>(token_frames);
     }
     if (total_frames == 0) {
-        OPENVINO_THROW("Sum(pred_dur) is zero; cannot generate audio");
+        OPENVINO_THROW("Sum(pred_dur) is zero; cannot generate audio. Diagnostics: tensor_shape=",
+                       shape_to_string(pred_dur_shape),
+                       ", element_type=",
+                       et.get_type_name(),
+                       ", full_len=",
+                       full_len,
+                       ", real_seq_len=",
+                       m_real_seq_len,
+                       ", l_max=",
+                       l_max,
+                       ", valid_before_zero={",
+                       valid_before_zero_summary,
+                       "}, full_before_zero={",
+                       full_before_zero_summary,
+                       "}, full_after_zero={",
+                       full_after_zero_summary,
+                       "}");
     }
 
     std::vector<int64_t> idx_all;
