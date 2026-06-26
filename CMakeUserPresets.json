@@ -1,0 +1,74 @@
+{
+    "version": 2,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 20,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "myRelease",
+            "inherits": [
+                "developer-build-release"
+            ],
+            "cacheVariables":{
+                "ENABLE_INTEL_NPU": true,
+                "ENABLE_DEBUG_CAPS": true,
+                "ENABLE_DEVELOPER_BUILD": true,
+                "ENABLE_API_VALIDATOR" : false,
+                "ENABLE_TESTS": false,
+                "ENABLE_INTEL_NPU_INTERNAL": true,
+                "ENABLE_OPENCV": false,
+                "ENABLE_PYTHON": true,
+                "ENABLE_INTEL_NPU_PROTOPIPE": false,
+
+                "ENABLE_INTEL_GPU": false,
+                "ENABLE_OV_TF_FRONTEND": false,
+                "ENABLE_OV_TF_LITE_FRONTEND": false,
+                "ENABLE_OV_PADDLE_FRONTEND": false,
+                "ENABLE_OV_JAX_FRONTEND": false,
+                "ENABLE_JS": false,
+
+                "ENABLE_INTEL_NPU_COMPILER": true
+            }
+        },
+        {
+            "name": "developer-build-fast-release-openvino",
+            "description": "Release build for OV. Requires Ninja, ccache, Clang and mold",
+            "displayName": "Developer OpenVINO Release build using Clang and mold",
+            "inherits": ["developer-build-fast-release"],
+            "binaryDir": "${sourceDir}/build-x86_64/Release",
+            "cacheVariables": {
+                "ENABLE_INTEL_NPU": true,
+                "ENABLE_PLUGINS_XML": true,
+                "ENABLE_INTEL_NPU_COMPILER": true,
+                "ENABLE_INTEL_NPU_PROTOPIPE": false,
+                "ENABLE_DEBUG_CAPS": true,
+                "ENABLE_TESTS": false,
+                "ENABLE_INTEL_GPU": false,
+                "ENABLE_ONEDNN_FOR_GPU": false,
+                "ENABLE_FUNCTIONAL_TESTS": false,
+                "ENABLE_OV_PADDLE_FRONTEND": false,
+                "ENABLE_OV_PYTORCH_FRONTEND": false,
+                "ENABLE_OV_JAX_FRONTEND": false,
+                "ENABLE_OV_TF_FRONTEND": false,
+                "ENABLE_OV_TF_LITE_FRONTEND": false,
+                "ENABLE_JS": false,
+                "OpenCV_DIR": {
+                    "type": "FILEPATH",
+                    "value": "~/git/opencv/opencv/build"
+                }
+            }
+        },
+        {
+            "name": "developer-build-fast-release-openvino-kokoro",
+            "description": "Release build for OV, modified for Kokoro model enablement. Requires Ninja, ccache, Clang and mold",
+            "displayName": "Developer Release build using Clang and mold",
+            "inherits": ["developer-build-fast-release-openvino"],
+            "binaryDir": "${sourceDir}/build-x86_64/Release",
+            "cacheVariables": {
+                "ENABLE_OV_PYTORCH_FRONTEND": true
+            }
+        }
+    ]
+}
