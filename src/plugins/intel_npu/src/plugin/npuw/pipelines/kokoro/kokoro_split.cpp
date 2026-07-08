@@ -141,21 +141,43 @@ KokoroSplitResult KokoroSplit::split_model(const std::shared_ptr<ov::Model>& mod
 
 // pred_dur - our prediction of durations, which will be used to generate alignment matrix
 // (we would multiply en and asr blocks with it) on host side and also the data we are going chunking by.
+//
+// A known output name is matched first. Export paths label this output differently: the
+// openvino_notebooks conversion keeps "pred_dur", while optimum-intel historically labelled it
+// "phonemes" (it is actually the durations). When none of the known names is present, fall back to a
+// structural match: the Kokoro graph exposes exactly two outputs - the floating-point audio waveform
+// and the integer predicted durations - so the single integer-typed Result is pred_dur.
 std::shared_ptr<ov::Node> ov::npuw::KokoroSplit::find_pred_dur_node(const std::shared_ptr<ov::Model>& model) {
-    // TODO Look for pred_dur node name or Sequence Max -> Convert (?) -> Squeeze -> Result
     for (const auto& op : model->get_results()) {
         const auto& name = op->get_name();
-        if (name == "pred_dur") {
-            return op;
-        }
-        for (const auto& output_name : op->output(0).get_names()) {
-            if (output_name == "pred_dur") {
+        const auto& output_names = op->output(0).get_names();
+        for (const auto* candidate : {"pred_dur", "phonemes"}) {
+            if (name == candidate || output_names.count(candidate) != 0) {
                 return op;
             }
         }
     }
 
-    return nullptr;
+    // Name not present - identify pred_dur by element type: the audio waveform is floating-point,
+    // so the only integer-typed Result corresponds to the predicted durations.
+    LOG_DEBUG("pred_dur node not found by name, falling back to structural identification by element type");
+    std::shared_ptr<ov::Node> integer_result;
+    for (const auto& op : model->get_results()) {
+        if (!op->get_output_element_type(0).is_integral_number()) {
+            continue;
+        }
+        if (integer_result) {
+            LOG_WARN("Multiple integer-typed Kokoro outputs found - cannot identify pred_dur structurally");
+            return nullptr;
+        }
+        integer_result = op;
+    }
+
+    if (integer_result) {
+        LOG_DEBUG("pred_dur identified structurally as the unique integer-typed model output");
+    }
+
+    return integer_result;
 }
 
 // en_matmul - left hand side of matmul for encoder block (bert encoder output, contain acoustic features, "how to say")

@@ -22,6 +22,10 @@ class KokoroSplit {
 public:
     static KokoroSplitResult split_model(const std::shared_ptr<ov::Model>& model, const KokoroConfig& config);
 
+    // Locate the predicted-durations ("pred_dur") output node. Exposed for unit testing: it matches a
+    // known output name ("pred_dur"/"phonemes") first, then falls back to the unique integer-typed Result.
+    static std::shared_ptr<ov::Node> find_pred_dur_node(const std::shared_ptr<ov::Model>& model);
+
 private:
     // Create model A - up to pred_dur output
     static std::shared_ptr<ov::Model> create_model_a(const std::shared_ptr<ov::Model>& model,
@@ -31,7 +35,6 @@ private:
     static std::shared_ptr<ov::Model> create_model_b(const std::shared_ptr<ov::Model>& model,
                                                      const KokoroConfig& config);
 
-    static std::shared_ptr<ov::Node> find_pred_dur_node(const std::shared_ptr<ov::Model>& model);
     static std::shared_ptr<ov::Node> find_en_matmul_node(const std::shared_ptr<ov::Model>& model);
     static std::shared_ptr<ov::Node> find_asr_matmul_node(const std::shared_ptr<ov::Model>& model);
 };

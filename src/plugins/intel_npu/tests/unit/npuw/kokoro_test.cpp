@@ -5,10 +5,19 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
+#include "openvino/core/model.hpp"
+#include "openvino/core/type/element_type.hpp"
+#include "openvino/op/parameter.hpp"
+#include "openvino/op/result.hpp"
+#include "pipelines/kokoro/kokoro_split.hpp"
 #include "pipelines/kokoro/kokoro_utils.hpp"
 
+using ov::npuw::KokoroSplit;
 using ov::npuw::kokoro::fill_text_mask_from_lengths;
 using ov::npuw::kokoro::find_real_sequence_length;
 using ov::npuw::kokoro::zero_padding_durations;
@@ -98,7 +107,7 @@ TEST(KokoroPadding, ZeroPadDurations_PaddingZeroed) {
     std::vector<int64_t> ids{0, 10, 20, 0, 0, 0};
     const auto real_len = find_real_sequence_length(ids.data(), ids.size());
 
-    // Simulate pred_dur output — every position got a non-zero duration 
+    // Simulate pred_dur output — every position got a non-zero duration
     std::vector<int64_t> dur{3, 5, 2, 4, 8, 1};
     zero_padding_durations(dur.data(), dur.size(), real_len);
 
@@ -112,3 +121,75 @@ TEST(KokoroPadding, ZeroPadDurations_PaddingZeroed) {
     EXPECT_EQ(dur[5], 0);
 }
 
+// ============================================================================
+// KokoroSplit::find_pred_dur_node - locating the predicted-durations output
+// across export paths that name it differently (CVS-187702).
+// ============================================================================
+
+namespace {
+
+// Build a minimal model whose outputs carry the given (element type, tensor name) pairs.
+// find_pred_dur_node only inspects model->get_results(), so a Parameter -> Result per output suffices.
+std::shared_ptr<ov::Model> make_model_with_outputs(
+    const std::vector<std::pair<ov::element::Type, std::string>>& outputs) {
+    ov::ParameterVector params;
+    ov::ResultVector results;
+    for (const auto& [type, name] : outputs) {
+        auto param = std::make_shared<ov::op::v0::Parameter>(type, ov::PartialShape{1, -1});
+        auto result = std::make_shared<ov::op::v0::Result>(param);
+        if (!name.empty()) {
+            result->output(0).get_tensor().set_names({name});
+        }
+        params.push_back(param);
+        results.push_back(result);
+    }
+    return std::make_shared<ov::Model>(results, params, "kokoro_stub");
+}
+
+}  // namespace
+
+// Reproducer for CVS-187702: optimum-intel labels the durations output "phonemes".
+TEST(KokoroFindPredDur, MatchesPhonemesName) {
+    auto model = make_model_with_outputs({{ov::element::f32, "waveform"}, {ov::element::i64, "phonemes"}});
+
+    auto node = KokoroSplit::find_pred_dur_node(model);
+
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(node->output(0).get_names().count("phonemes"));
+}
+
+// A known name resolves pred_dur deterministically even when several integer outputs are present.
+TEST(KokoroFindPredDur, KnownNameWinsOverAmbiguousIntegers) {
+    auto model = make_model_with_outputs(
+        {{ov::element::f32, "waveform"}, {ov::element::i32, "aux"}, {ov::element::i64, "phonemes"}});
+
+    auto node = KokoroSplit::find_pred_dur_node(model);
+
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(node->output(0).get_names().count("phonemes"));
+}
+
+// Unknown name, but the single integer-typed Result is unambiguously the durations.
+TEST(KokoroFindPredDur, FallsBackToUniqueIntegerResult) {
+    auto model = make_model_with_outputs({{ov::element::f32, "waveform"}, {ov::element::i64, "durations"}});
+
+    auto node = KokoroSplit::find_pred_dur_node(model);
+
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(node->output(0).get_names().count("durations"));
+}
+
+// Ambiguous: multiple integer outputs and no known name - cannot be resolved.
+TEST(KokoroFindPredDur, MultipleIntegerResultsReturnsNull) {
+    auto model = make_model_with_outputs(
+        {{ov::element::f32, "waveform"}, {ov::element::i64, "foo"}, {ov::element::i32, "bar"}});
+
+    EXPECT_EQ(KokoroSplit::find_pred_dur_node(model), nullptr);
+}
+
+// No integer output at all - nothing to select.
+TEST(KokoroFindPredDur, NoIntegerResultReturnsNull) {
+    auto model = make_model_with_outputs({{ov::element::f32, "waveform"}, {ov::element::f32, "aux"}});
+
+    EXPECT_EQ(KokoroSplit::find_pred_dur_node(model), nullptr);
+}
