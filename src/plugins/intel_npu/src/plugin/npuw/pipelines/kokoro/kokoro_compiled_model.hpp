@@ -56,6 +56,8 @@ public:
     }
 
 private:
+    KokoroCompiledModel(const std::shared_ptr<ov::Model>& model, const std::shared_ptr<const ov::IPlugin>& plugin);
+
     KokoroConfig m_kokoro_cfg;
     std::string m_name;
     std::shared_ptr<::intel_npu::OptionsDesc> m_options_desc;

@@ -10,6 +10,7 @@
 #include "kokoro_model_transforms.hpp"
 #include "kokoro_split.hpp"
 #include "npuw/logging.hpp"
+#include "npuw/serialization.hpp"
 #include "openvino/runtime/properties.hpp"
 #include "plugin.hpp"
 
@@ -64,15 +65,19 @@ void set_default_cpu_inference_precision(ov::AnyMap& properties) {
 }  // namespace
 
 ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Model>& model,
-                                                   const std::shared_ptr<const ov::IPlugin>& plugin,
-                                                   const ov::AnyMap& properties)
+                                                   const std::shared_ptr<const ov::IPlugin>& plugin)
     : ov::npuw::ICompiledModel(model, plugin),
       m_name(model->get_friendly_name()),
       m_options_desc(std::make_shared<::intel_npu::OptionsDesc>()),
       m_cfg(m_options_desc) {
-    LOG_DEBUG("Creating KokoroCompiledModel");
-
     ::intel_npu::registerNPUWKokoroOptions(*m_options_desc);
+}
+
+ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Model>& model,
+                                                   const std::shared_ptr<const ov::IPlugin>& plugin,
+                                                   const ov::AnyMap& properties)
+    : KokoroCompiledModel(model, plugin) {
+    LOG_DEBUG("Creating KokoroCompiledModel");
 
     // Split properties to separate Kokoro specific options and NPU plugin options
     ov::AnyMap npuw_kokoro_props;
@@ -121,18 +126,41 @@ ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Mod
 }
 
 void ov::npuw::KokoroCompiledModel::export_model(std::ostream& stream) const {
-    // FIXME Not implemented
     LOG_DEBUG("Exporting KokoroCompiledModel");
-    OPENVINO_NOT_IMPLEMENTED;
+    ov::npuw::s11n::write_header(stream, NPUW_KOKORO_COMPILED_MODEL_INDICATOR);
+    auto writer = ov::npuw::s11n::Stream::writer(stream);
+    writer & m_name& inputs() & outputs() & m_cfg;
+
+    // Each inner ORC container carries its own size, weights and encryption state.
+    m_model_a_compiled->export_model(stream);
+    m_model_b_compiled->export_model(stream);
 }
 
 std::shared_ptr<ov::npuw::KokoroCompiledModel> ov::npuw::KokoroCompiledModel::import_model(
     std::istream& stream,
     const std::shared_ptr<const ov::IPlugin>& plugin,
     const ov::AnyMap& properties) {
-    // FIXME Not implemented
     LOG_DEBUG("Importing KokoroCompiledModel");
-    OPENVINO_NOT_IMPLEMENTED;
+    ov::npuw::s11n::read_and_check_header(stream, NPUW_KOKORO_COMPILED_MODEL_INDICATOR, "KokoroCompiledModel");
+
+    std::string name;
+    ov::ParameterVector parameters;
+    ov::NodeVector results;
+    auto reader = ov::npuw::s11n::Stream::reader(stream);
+    reader & name & parameters & results;
+    auto model = std::make_shared<ov::Model>(ov::as_output_vector(results), parameters, name);
+    auto compiled = std::shared_ptr<KokoroCompiledModel>(new KokoroCompiledModel(model, plugin));
+
+    reader & compiled->m_cfg;
+    compiled->m_kokoro_cfg.block_size = compiled->m_cfg.get<::intel_npu::NPUW_KOKORO_BLOCK_SIZE>();
+    compiled->m_kokoro_cfg.overlap_size = compiled->m_cfg.get<::intel_npu::NPUW_KOKORO_OVERLAP_SIZE>();
+    OPENVINO_ASSERT(compiled->block_size() > 0, "Kokoro blob: block_size must be > 0");
+    OPENVINO_ASSERT(compiled->overlap_size() < compiled->block_size(),
+                    "Kokoro blob: overlap_size must be smaller than block_size");
+
+    compiled->m_model_a_compiled = ov::npuw::ICompiledModel::import_model(stream, plugin, properties);
+    compiled->m_model_b_compiled = ov::npuw::ICompiledModel::import_model(stream, plugin, properties);
+    return compiled;
 }
 
 std::shared_ptr<const ov::Model> ov::npuw::KokoroCompiledModel::get_runtime_model() const {

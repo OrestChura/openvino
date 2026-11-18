@@ -428,6 +428,8 @@ std::shared_ptr<ov::npuw::ICompiledModel> ov::npuw::ICompiledModel::import_model
         return ov::npuw::LLMCompiledModel::import_model(stream, plugin, properties);
     } else if (compiled_model_indicator == NPUW_BATCHED_COMPILED_MODEL_INDICATOR) {
         return ov::npuw::batched::CompiledModel::import_model(stream, plugin, properties);
+    } else if (compiled_model_indicator == NPUW_KOKORO_COMPILED_MODEL_INDICATOR) {
+        return ov::npuw::KokoroCompiledModel::import_model(stream, plugin, properties);
     } else if (compiled_model_indicator == NPUW_COMPILED_MODEL_INDICATOR) {
         // The flat CompiledModel moved to the ORC container above; its old
         // indicator-headed layout has no reader anymore.
@@ -1651,7 +1653,17 @@ std::shared_ptr<ov::npuw::CompiledModel> ov::npuw::CompiledModel::deserialize_or
                 return compiled->m_dev_list.at(device_index);
             },
             [&](const std::string& device) {
-                return make_submodel_import_config(device, compiled->m_cfg);
+                auto import_config = make_submodel_import_config(device, compiled->m_cfg);
+                if (ov::npuw::util::starts_with(device, "CPU")) {
+                    // CPU blobs store the graph, not its inference precision hint.
+                    const auto device_properties =
+                        plugin->get_core()->get_supported_property(device, compiled->m_non_npuw_props);
+                    if (const auto precision = device_properties.find(ov::hint::inference_precision.name());
+                        precision != device_properties.end()) {
+                        import_config.insert(*precision);
+                    }
+                }
+                return import_config;
             });
         submodel.serialize(child_stream, compiled->m_import_weights_ctx, std::nullopt, &submodel_ctx);
         child.expect_end();
