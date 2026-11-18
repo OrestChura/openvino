@@ -14,6 +14,9 @@ inline constexpr SchemaUUID NPUW_ORC_PARTITIONED_SCHEMA =
 inline constexpr SchemaUUID NPUW_ORC_GQA_SCHEMA =
     {0x4E, 0x50, 0x55, 0x57, 0x43, 0x4D, 0x4F, 0x44, 0x47, 0x51, 0x41, 0x30, 0x30, 0x30, 0x30, 0x31};
 
+inline constexpr SchemaUUID NPUW_ORC_KOKORO_SCHEMA =
+    {0x4E, 0x50, 0x55, 0x57, 0x43, 0x4D, 0x4F, 0x44, 0x4B, 0x4F, 0x4B, 0x30, 0x30, 0x30, 0x30, 0x31};
+
 // Keep the top-level on-wire type IDs centralized so future schemas can reuse
 // the same registry without accidental collisions.
 enum class PartitionedModel : TypeId {
@@ -31,6 +34,10 @@ enum class WeightsBank : TypeId {
 // High-level front-end containers start at ~16K
 enum class GQAModel : TypeId {
     ID = 17000,
+};
+
+enum class KokoroModel : TypeId {
+    ID = 18000,
 };
 
 }  // namespace ov::npuw::orc::schema_npuw

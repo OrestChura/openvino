@@ -10,6 +10,7 @@
 #include "kokoro_model_transforms.hpp"
 #include "kokoro_split.hpp"
 #include "npuw/logging.hpp"
+#include "npuw/serialization.hpp"
 #include "openvino/runtime/properties.hpp"
 #include "plugin.hpp"
 
@@ -42,6 +43,13 @@ std::map<std::string, std::string> any_copy(const ov::AnyMap& params) {
     return result;
 }
 
+std::function<std::string(const std::string&)> get_encrypt_callback(const ov::AnyMap& properties) {
+    if (const auto it = properties.find(ov::cache_encryption_callbacks.name()); it != properties.end()) {
+        return it->second.as<ov::EncryptionCallbacks>().encrypt;
+    }
+    return {};
+}
+
 /**
  * @brief Kokoro's CPU-offloaded subgraphs are precision-sensitive.
  * Setting default CPU inference precision to f32 to ensure better accuracy, if not set by user.
@@ -64,15 +72,19 @@ void set_default_cpu_inference_precision(ov::AnyMap& properties) {
 }  // namespace
 
 ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Model>& model,
-                                                   const std::shared_ptr<const ov::IPlugin>& plugin,
-                                                   const ov::AnyMap& properties)
+                                                   const std::shared_ptr<const ov::IPlugin>& plugin)
     : ov::npuw::ICompiledModel(model, plugin),
       m_name(model->get_friendly_name()),
       m_options_desc(std::make_shared<::intel_npu::OptionsDesc>()),
       m_cfg(m_options_desc) {
-    LOG_DEBUG("Creating KokoroCompiledModel");
-
     ::intel_npu::registerNPUWKokoroOptions(*m_options_desc);
+}
+
+ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Model>& model,
+                                                   const std::shared_ptr<const ov::IPlugin>& plugin,
+                                                   const ov::AnyMap& properties)
+    : KokoroCompiledModel(model, plugin) {
+    LOG_DEBUG("Creating KokoroCompiledModel");
 
     // Split properties to separate Kokoro specific options and NPU plugin options
     ov::AnyMap npuw_kokoro_props;
@@ -100,8 +112,9 @@ ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Mod
     // NONE pipeline keeps it as a single subgraph (no partitioning overhead).
     ov::AnyMap properties_model_a = common_props;
     properties_model_a["NPUW_ONLINE_PIPELINE"] = "NONE";
-    m_model_a_compiled = std::dynamic_pointer_cast<ov::npuw::ICompiledModel>(
+    m_model_a_compiled = std::dynamic_pointer_cast<ov::npuw::CompiledModel>(
         ov::npuw::ICompiledModel::create(split_result.model_a, plugin, properties_model_a));
+    OPENVINO_ASSERT(m_model_a_compiled, "Kokoro model A requires an NPUW CompiledModel");
 
     LOG_DEBUG("Compiling kokoro model B...");
     ov::AnyMap properties_model_b = common_props;
@@ -116,23 +129,104 @@ ov::npuw::KokoroCompiledModel::KokoroCompiledModel(const std::shared_ptr<ov::Mod
                                                   "P:BoxMullerNoise/NPU,P:AngleComplex/NPU";
     }
     set_default_cpu_inference_precision(properties_model_b);
-    m_model_b_compiled = std::dynamic_pointer_cast<ov::npuw::ICompiledModel>(
+    m_model_b_compiled = std::dynamic_pointer_cast<ov::npuw::CompiledModel>(
         ov::npuw::ICompiledModel::create(split_result.model_b, plugin, properties_model_b));
+    OPENVINO_ASSERT(m_model_b_compiled, "Kokoro model B requires an NPUW CompiledModel");
 }
 
 void ov::npuw::KokoroCompiledModel::export_model(std::ostream& stream) const {
-    // FIXME Not implemented
     LOG_DEBUG("Exporting KokoroCompiledModel");
-    OPENVINO_NOT_IMPLEMENTED;
+    ov::npuw::orc::write_file_header(stream, ov::npuw::orc::schema_npuw::NPUW_ORC_KOKORO_SCHEMA);
+    ov::npuw::orc::with_section(stream, kOrcType, kOrcVersion, 0u, [&] {
+        ov::npuw::orc::with_leaf_section(stream, ov::npuw::orc::META_SECTION_TYPE, 0u, [&] {
+            auto meta_stream = ov::npuw::orc::Stream::writer(stream);
+            meta_stream & m_name& inputs() & outputs() & m_cfg;
+        });
+        m_model_a_compiled->serialize_orc_container(stream,
+                                                    /* include_weights_bank = */ true,
+                                                    get_encrypt_callback(m_model_a_compiled->non_npuw_props()));
+        m_model_b_compiled->serialize_orc_container(stream,
+                                                    /* include_weights_bank = */ true,
+                                                    get_encrypt_callback(m_model_b_compiled->non_npuw_props()));
+    });
 }
 
 std::shared_ptr<ov::npuw::KokoroCompiledModel> ov::npuw::KokoroCompiledModel::import_model(
     std::istream& stream,
     const std::shared_ptr<const ov::IPlugin>& plugin,
     const ov::AnyMap& properties) {
-    // FIXME Not implemented
     LOG_DEBUG("Importing KokoroCompiledModel");
-    OPENVINO_NOT_IMPLEMENTED;
+    const auto header = ov::npuw::orc::read_file_header(stream);
+    OPENVINO_ASSERT(header.schema_uuid == ov::npuw::orc::schema_npuw::NPUW_ORC_KOKORO_SCHEMA,
+                    "Unsupported ORC schema for NPUW KokoroCompiledModel");
+
+    ov::npuw::orc::ScopedReadSection root(stream);
+    OPENVINO_ASSERT(root.remaining() <= ov::npuw::orc::Stream::reader(stream).remaining(),
+                    "Kokoro root section claims ",
+                    root.remaining(),
+                    " which exceeds the stream size");
+    OPENVINO_ASSERT(root.header().type == kOrcType, "Not a Kokoro ORC blob");
+    OPENVINO_ASSERT(root.header().version <= kOrcVersion,
+                    "Kokoro blob was produced by a newer NPUW (section version ",
+                    root.header().version,
+                    "; this build supports up to ",
+                    kOrcVersion,
+                    ")");
+    OPENVINO_ASSERT(!ov::npuw::orc::has_flag(root.header().flags, ov::npuw::orc::SectionFlag::LEAF),
+                    "Unsupported ORC NPUW Kokoro root section");
+    OPENVINO_ASSERT(!root.done(), "Unexpected end of Kokoro section: missing metadata");
+
+    ov::npuw::orc::ScopedReadSection meta(stream);
+    OPENVINO_ASSERT(meta.remaining() <= root.remaining(), "Kokoro META section exceeds Kokoro root section");
+    OPENVINO_ASSERT(meta.header().type == ov::npuw::orc::META_SECTION_TYPE &&
+                        ov::npuw::orc::has_flag(meta.header().flags, ov::npuw::orc::SectionFlag::LEAF),
+                    "Expected ORC NPUW metadata section, got type ",
+                    meta.header().type);
+    const auto meta_blob = meta.read_remaining_blob();
+    auto meta_stream = ov::npuw::orc::Stream::memory_reader(meta_blob.data(), meta_blob.size());
+
+    std::string name;
+    ov::ParameterVector parameters;
+    ov::NodeVector results;
+    meta_stream & name & parameters & results;
+    auto model = std::make_shared<ov::Model>(ov::as_output_vector(results), parameters, name);
+    auto compiled = std::shared_ptr<KokoroCompiledModel>(new KokoroCompiledModel(model, plugin));
+    meta_stream & compiled->m_cfg;
+    OPENVINO_ASSERT(meta_stream.remaining() == 0, "Unexpected remaining bytes in KokoroCompiledModel META section");
+    meta.expect_end();
+    compiled->m_kokoro_cfg.block_size = compiled->m_cfg.get<::intel_npu::NPUW_KOKORO_BLOCK_SIZE>();
+    compiled->m_kokoro_cfg.overlap_size = compiled->m_cfg.get<::intel_npu::NPUW_KOKORO_OVERLAP_SIZE>();
+    OPENVINO_ASSERT(compiled->block_size() > 0, "Kokoro blob: block_size must be > 0");
+    OPENVINO_ASSERT(compiled->overlap_size() < compiled->block_size(),
+                    "Kokoro blob: overlap_size must be smaller than block_size");
+
+    auto validate_child_size = [&](const char* child_name) {
+        const auto body_remaining = root.remaining();
+        constexpr std::streamoff section_header_size = sizeof(ov::npuw::orc::TypeId) + sizeof(ov::npuw::orc::Version) +
+                                                       sizeof(ov::npuw::orc::SectionFlags) + sizeof(std::uint64_t);
+        OPENVINO_ASSERT(body_remaining >= static_cast<std::size_t>(section_header_size),
+                        "Kokoro root is missing ",
+                        child_name,
+                        " CompiledModel section");
+        const auto saved = stream.tellg();
+        auto child_reader = ov::npuw::orc::Stream::reader(stream);
+        ov::npuw::orc::SectionHeader child_header;
+        child_reader & child_header;
+        stream.seekg(saved);
+        OPENVINO_ASSERT(child_header.size <= body_remaining - static_cast<std::size_t>(section_header_size),
+                        "Kokoro ",
+                        child_name,
+                        " CompiledModel section exceeds Kokoro root section");
+    };
+
+    validate_child_size("model A");
+    compiled->m_model_a_compiled =
+        ov::npuw::CompiledModel::deserialize_orc_container(stream, plugin, properties, true, {});
+    validate_child_size("model B");
+    compiled->m_model_b_compiled =
+        ov::npuw::CompiledModel::deserialize_orc_container(stream, plugin, properties, true, {});
+    root.expect_end();
+    return compiled;
 }
 
 std::shared_ptr<const ov::Model> ov::npuw::KokoroCompiledModel::get_runtime_model() const {

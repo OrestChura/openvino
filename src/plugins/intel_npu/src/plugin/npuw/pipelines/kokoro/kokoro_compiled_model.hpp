@@ -26,6 +26,10 @@ struct KokoroConfig {
 
 class KokoroCompiledModel : public ov::npuw::ICompiledModel {
 public:
+    static constexpr ov::npuw::orc::TypeId kOrcType =
+        static_cast<ov::npuw::orc::TypeId>(ov::npuw::orc::schema_npuw::KokoroModel::ID);
+    static constexpr ov::npuw::orc::Version kOrcVersion = 0u;
+
     KokoroCompiledModel(const std::shared_ptr<ov::Model>& model,
                         const std::shared_ptr<const ov::IPlugin>& plugin,
                         const ov::AnyMap& properties);
@@ -56,6 +60,8 @@ public:
     }
 
 private:
+    KokoroCompiledModel(const std::shared_ptr<ov::Model>& model, const std::shared_ptr<const ov::IPlugin>& plugin);
+
     KokoroConfig m_kokoro_cfg;
     std::string m_name;
     std::shared_ptr<::intel_npu::OptionsDesc> m_options_desc;
@@ -64,8 +70,8 @@ private:
     std::shared_ptr<ov::ISyncInferRequest> create_kokoro_infer_request();
     std::shared_ptr<ov::ISyncInferRequest> create_sync_infer_request() const override;
 
-    ov::SoPtr<ov::ICompiledModel> m_model_a_compiled;
-    std::shared_ptr<ov::npuw::ICompiledModel> m_model_b_compiled;
+    std::shared_ptr<ov::npuw::CompiledModel> m_model_a_compiled;
+    std::shared_ptr<ov::npuw::CompiledModel> m_model_b_compiled;
 
     // Each model serializes only its own update, so set_property() holds this for both:
     // concurrent calls can't leave the two models with different values

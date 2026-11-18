@@ -400,6 +400,9 @@ std::shared_ptr<ov::npuw::ICompiledModel> ov::npuw::ICompiledModel::import_model
         if (orc_header->schema_uuid == ov::npuw::orc::schema_npuw::NPUW_ORC_GQA_SCHEMA) {
             return ov::npuw::GQACompiledModel::import_model(stream, plugin, properties);
         }
+        if (orc_header->schema_uuid == ov::npuw::orc::schema_npuw::NPUW_ORC_KOKORO_SCHEMA) {
+            return ov::npuw::KokoroCompiledModel::import_model(stream, plugin, properties);
+        }
         if (orc_header->schema_uuid == ov::npuw::orc::schema_npuw::NPUW_ORC_PARTITIONED_SCHEMA) {
             return ov::npuw::CompiledModel::import_model(stream, plugin, properties);
         }
@@ -433,6 +436,8 @@ std::shared_ptr<ov::npuw::ICompiledModel> ov::npuw::ICompiledModel::import_model
         legacy_kind_cmod = "CompiledModel";
     } else if (compiled_model_indicator == NPUW_GQA_COMPILED_MODEL_INDICATOR) {
         legacy_kind_cmod = "GQACompiledModel";
+    } else if (compiled_model_indicator == NPUW_KOKORO_COMPILED_MODEL_INDICATOR) {
+        legacy_kind_cmod = "KokoroCompiledModel";
     }
     if (!legacy_kind_cmod.empty()) {
         OPENVINO_THROW("Legacy flat NPUW ",
@@ -1657,7 +1662,17 @@ std::shared_ptr<ov::npuw::CompiledModel> ov::npuw::CompiledModel::deserialize_or
                 return compiled->m_dev_list.at(device_index);
             },
             [&](const std::string& device) {
-                return make_submodel_import_config(device, compiled->m_cfg);
+                auto import_config = make_submodel_import_config(device, compiled->m_cfg);
+                if (ov::npuw::util::starts_with(device, "CPU")) {
+                    // CPU blobs store the graph, not its inference precision hint.
+                    const auto device_properties =
+                        plugin->get_core()->get_supported_property(device, compiled->m_non_npuw_props);
+                    if (const auto precision = device_properties.find(ov::hint::inference_precision.name());
+                        precision != device_properties.end()) {
+                        import_config.insert(*precision);
+                    }
+                }
+                return import_config;
             });
         submodel.serialize(child_stream, compiled->m_import_weights_ctx, std::nullopt, &submodel_ctx);
         child.expect_end();
