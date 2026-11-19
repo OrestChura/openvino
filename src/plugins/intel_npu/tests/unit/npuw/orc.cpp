@@ -252,7 +252,7 @@ TEST(OrcTest, SchemaSkipsUnknownOptionalChildren) {
                                           Section::raw(TYPE_UNKNOWN,
                                                        1u,
                                                        std::vector<std::byte>{std::byte{0xAB}, std::byte{0xCD}},
-                                                       static_cast<SectionFlags>(SectionFlag::OPTIONAL)),
+                                                       static_cast<SectionFlags>(SectionFlag::IS_OPTIONAL)),
                                           make_payload_section(TYPE_WGHT, 1u, BlobSummary{1u, {"lazy"}})});
 
     Schema schema;

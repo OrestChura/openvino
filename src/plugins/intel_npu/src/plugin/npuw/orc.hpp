@@ -44,7 +44,7 @@ using SchemaUUID = std::array<std::uint8_t, 16>;
 constexpr TypeId META_SECTION_TYPE = 20u;
 
 enum class SectionFlag : SectionFlags {
-    OPTIONAL = 1ull << 0,
+    IS_OPTIONAL = 1ull << 0,
     LEAF = 1ull << 1,  // payload contains raw bytes only, no child sections
     ENCRYPTED = 1ull << 2,
 };
@@ -313,7 +313,7 @@ struct Section {
     std::vector<Section> children;
 
     bool is_optional() const {
-        return has_flag(flags, SectionFlag::OPTIONAL);
+        return has_flag(flags, SectionFlag::IS_OPTIONAL);
     }
 
     bool is_leaf() const {
