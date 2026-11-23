@@ -132,18 +132,43 @@ TEST_F(LLM4DFloatAttentionMaskTest, RejectsMaskContractsOtherThanRank2OrFloatRan
     }
 }
 
-// Each option below is accepted with the 2D int64 mask and rejected with NotImplemented for 4D float.
-// Change when 4d float is supported for these features
-TEST_F(LLM4DFloatAttentionMaskTest, ChunkedPrefillIsRejected) {
+TEST_F(LLM4DFloatAttentionMaskTest, ChunkedPrefillIsSupported) {
     const auto props = make_props({{"NPUW_LLM_PREFILL_HINT", "DYNAMIC"}, {"NPUW_LLM_PREFILL_CHUNK_SIZE", "32"}});
-    EXPECT_NO_THROW(compile(build_llm_test_model(), props));
-    EXPECT_THROW(compile(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), props), ov::NotImplemented);
+    std::unique_ptr<TestableLLMCompiledModel> compiled;
+    ASSERT_NO_THROW(compiled = compile(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), props));
+    ASSERT_NE(compiled, nullptr);
+
+    const auto* prefill = m_recorder.find_contains("_prefill");
+    ASSERT_NE(prefill, nullptr);
+    const auto mask = find_port_by_name(std::as_const(*prefill->model).inputs(), "attention_mask").value();
+    EXPECT_EQ(mask.get_partial_shape(), (ov::PartialShape{1, 1, 32, kMaxPromptLen}));
+    EXPECT_EQ(compiled->get_property("NPUW_LLM_PREFILL_HINT").as<std::string>(), "DYNAMIC");
+    EXPECT_EQ(compiled->get_property("NPUW_LLM_PREFILL_ATTENTION_HINT").as<std::string>(), "STATIC");
+    for (const auto& call : m_recorder.calls()) {
+        SCOPED_TRACE(call.friendly_name);
+        EXPECT_NO_THROW(call.model->validate_nodes_and_infer_types());
+    }
 }
 
+// Each option below is accepted with the 2D int64 mask and rejected with NotImplemented for 4D float.
 TEST_F(LLM4DFloatAttentionMaskTest, PrefixCachingIsRejected) {
     const auto props = make_props({{"NPUW_LLM_ENABLE_PREFIX_CACHING", "YES"}});
     EXPECT_NO_THROW(compile(build_llm_test_model(), props));
     EXPECT_THROW(compile(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), props), ov::NotImplemented);
+}
+
+TEST_F(LLM4DFloatAttentionMaskTest, ChunkedPrefillRejectsExplicitNonStaticAttentionHint) {
+    const auto props = make_props({{"NPUW_LLM_PREFILL_HINT", "DYNAMIC"},
+                                   {"NPUW_LLM_PREFILL_CHUNK_SIZE", "32"},
+                                   {"NPUW_LLM_PREFILL_ATTENTION_HINT", "PYRAMID"}});
+    EXPECT_NO_THROW(compile(build_llm_test_model(), props));
+    EXPECT_THROW(compile(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), props), ov::NotImplemented);
+
+    const auto config_props = make_props({{"NPUW_LLM_PREFILL_HINT", "DYNAMIC"},
+                                          {"NPUW_LLM_PREFILL_CHUNK_SIZE", "32"},
+                                          {"NPUW_LLM_PREFILL_CONFIG", ov::AnyMap{{"NPUW_ATTN", "PYRAMID"}}}});
+    EXPECT_THROW(compile(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), config_props),
+                 ov::NotImplemented);
 }
 
 TEST_F(LLM4DFloatAttentionMaskTest, SwaKVCacheShrinkIsRejected) {
@@ -342,6 +367,36 @@ TEST_P(LLM4DFloatAttentionMaskByTypeTest, PrefillPutsTheMaskIntoTheBottomRightCo
     });
 }
 
+TEST_P(LLM4DFloatAttentionMaskByTypeTest, ChunkedPrefillStagesPastAndCurrentColumnsForTheFinalChunk) {
+    constexpr size_t kChunkSize = 4;
+    constexpr size_t kPromptLen = 10;
+    constexpr size_t kPastLen = 8;
+    compile_with_mask_type(
+        GetParam(),
+        {{"NPUW_LLM_PREFILL_HINT", "DYNAMIC"}, {"NPUW_LLM_PREFILL_CHUNK_SIZE", std::to_string(kChunkSize)}});
+    run_prefill(kPromptLen);
+
+    const auto staged = request().prefill_attention_mask();
+    const size_t width = staged->get_shape()[3];
+    ASSERT_EQ(staged->get_shape(), (ov::Shape{1, 1, kChunkSize, kMaxPromptLen}));
+    const size_t first_row = kChunkSize - (kPromptLen - kPastLen);
+    const size_t first_current_column = width - (kPromptLen - kPastLen);
+    const float masked = padding_value();
+    expect_cells(staged, [&](size_t row, size_t column) {
+        if (row < first_row) {
+            return masked;
+        }
+        const size_t source_row = kPastLen + row - first_row;
+        if (column < kPastLen) {
+            return marker(source_row, column);
+        }
+        if (column >= first_current_column) {
+            return marker(source_row, kPastLen + column - first_current_column);
+        }
+        return masked;
+    });
+}
+
 // Prefill does not expand or realign the caller mask, so it should be [prompt, prompt],
 // else it would leave real tokens fully masked or shifted.
 TEST_P(LLM4DFloatAttentionMaskByTypeTest, PrefillRejectsMaskThatDoesNotCoverThePrompt) {
@@ -524,6 +579,34 @@ TEST_F(LLM4DFloatAttentionMaskRoundTrip, ImportedModelRunsLikeTheCompiledOne) {
         ASSERT_EQ(actual[step].get_shape(), expected[step].get_shape());
         for (size_t i = 0; i < expected[step].get_size(); ++i) {
             ASSERT_NEAR(actual[step].data<float>()[i], expected[step].data<float>()[i], 1e-5f) << "element " << i;
+        }
+    }
+}
+
+TEST_F(LLM4DFloatAttentionMaskRoundTrip, ChunkedPrefillRunsLikeWholePrefill) {
+    constexpr size_t kPromptLen = 72;
+    constexpr size_t kGenerateSteps = 2;
+    constexpr float kTolerance = 0.05f;
+
+    ov::Core core;
+    auto whole_props = make_props({{"NPU_USE_NPUW", "YES"}, {"NPUW_ONLINE_PIPELINE", "NONE"}});
+    auto chunked_props = whole_props;
+    chunked_props["NPUW_LLM_PREFILL_HINT"] = "DYNAMIC";
+    chunked_props["NPUW_LLM_PREFILL_CHUNK_SIZE"] = "32";
+
+    auto whole =
+        core.compile_model(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), "NPU", whole_props);
+    auto chunked =
+        core.compile_model(build_llm_test_model(make_4d_float_mask_config(ov::element::f32)), "NPU", chunked_props);
+
+    const auto expected = run_prefill_and_generate_logits(whole, kPromptLen, kGenerateSteps);
+    const auto actual = run_prefill_and_generate_logits(chunked, kPromptLen, kGenerateSteps);
+    ASSERT_EQ(actual.size(), expected.size());
+    for (size_t step = 0; step < expected.size(); ++step) {
+        SCOPED_TRACE("step " + std::to_string(step));
+        ASSERT_EQ(actual[step].get_shape(), expected[step].get_shape());
+        for (size_t i = 0; i < expected[step].get_size(); ++i) {
+            ASSERT_NEAR(actual[step].data<float>()[i], expected[step].data<float>()[i], kTolerance) << "element " << i;
         }
     }
 }

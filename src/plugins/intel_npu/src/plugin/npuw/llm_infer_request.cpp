@@ -200,6 +200,55 @@ void stage_additive_attention_mask_for_prefill(const ov::SoPtr<ov::ITensor>& src
     copy_additive_attention_block(src, dst, 0, 0, dst_shape[2] - query_len, dst_shape[3] - key_len, query_len, key_len);
 }
 
+void stage_additive_attention_mask_for_chunked_prefill(const ov::SoPtr<ov::ITensor>& src,
+                                                       const ov::SoPtr<ov::ITensor>& dst,
+                                                       size_t prompt_len,
+                                                       size_t past_len,
+                                                       size_t current_len) {
+    const auto& src_shape = src->get_shape();
+    const auto& dst_shape = dst->get_shape();
+    OPENVINO_ASSERT(src_shape.size() == 4u && dst_shape.size() == 4u,
+                    "Additive attention_mask tensors must be rank 4.");
+    OPENVINO_ASSERT(src_shape[2] == prompt_len && src_shape[3] == prompt_len,
+                    "Additive chunked-prefill attention_mask must cover exactly the prompt: expected Q=K=",
+                    prompt_len,
+                    ", got Q=",
+                    src_shape[2],
+                    ", K=",
+                    src_shape[3],
+                    ".");
+    OPENVINO_ASSERT(past_len + current_len <= prompt_len,
+                    "Additive chunked-prefill mask range [",
+                    past_len,
+                    ", ",
+                    past_len + current_len,
+                    ") exceeds prompt length ",
+                    prompt_len,
+                    ".");
+    OPENVINO_ASSERT(current_len <= dst_shape[2] && past_len + current_len <= dst_shape[3],
+                    "Additive chunked-prefill attention_mask does not fit static destination shape ",
+                    dst_shape,
+                    ": current=",
+                    current_len,
+                    ", past=",
+                    past_len,
+                    ".");
+
+    fill_additive_attention_mask(dst);
+    const size_t dst_q_offset = dst_shape[2] - current_len;
+    if (past_len > 0) {
+        copy_additive_attention_block(src, dst, past_len, 0, dst_q_offset, 0, current_len, past_len);
+    }
+    copy_additive_attention_block(src,
+                                  dst,
+                                  past_len,
+                                  past_len,
+                                  dst_q_offset,
+                                  dst_shape[3] - current_len,
+                                  current_len,
+                                  current_len);
+}
+
 // Stages the additive attention mask of shape [1, 1, current, past + current] into the generate request.
 void stage_additive_attention_mask_for_generate(const ov::SoPtr<ov::ITensor>& attention_mask,
                                                 const ov::SoPtr<ov::ITensor>& kv_attn_mask,
@@ -1420,19 +1469,25 @@ void ov::npuw::LLMInferRequest::infer_chunked_prefill(ov::SoPtr<ov::ITensor> inp
                 cache_context.restore_prefix_cache = false;
             }
 
-            // Populate the attention mask for the present chunk
-            // For the already processed tokens, they will be added into the attention mask after inference call
-            size_t last_chunk_offset = attn_mask_in_tensor->get_size() - chunk_prompt_len;
-            if (current_prompts_len < chunk_prompt_len) {
-                // We will populate current_prompts_len on the right side of attention mask for the processing tokens
-                // If the current prompt length is smaller than the chunk prompt length,
-                // clear the last chunk of the attention mask to ensure non-relevant tokens are masked
-                ov::npuw::util::fill_tensor<int64_t>(attn_mask_in_tensor, 0, last_chunk_offset);
-            }
+            if (m_npuw_llm_compiled_model->m_attention_mask_is_4d_float) {
+                stage_additive_attention_mask_for_chunked_prefill(attention_mask,
+                                                                  attn_mask_in_tensor,
+                                                                  input_prompt_len,
+                                                                  kvcache_desc.num_stored_tokens,
+                                                                  current_prompts_len);
+            } else {
+                // For the already processed tokens, they will be added into the attention mask after inference.
+                size_t last_chunk_offset = attn_mask_in_tensor->get_size() - chunk_prompt_len;
+                if (current_prompts_len < chunk_prompt_len) {
+                    // A short final chunk is right-aligned in the static window.
+                    ov::npuw::util::fill_tensor<int64_t>(attn_mask_in_tensor, 0, last_chunk_offset);
+                }
 
-            std::copy_n(attention_mask->data<int64_t>() + kvcache_desc.num_stored_tokens,
-                        current_prompts_len,
-                        attn_mask_in_tensor->data<int64_t>() + attn_mask_in_tensor->get_size() - current_prompts_len);
+                std::copy_n(
+                    attention_mask->data<int64_t>() + kvcache_desc.num_stored_tokens,
+                    current_prompts_len,
+                    attn_mask_in_tensor->data<int64_t>() + attn_mask_in_tensor->get_size() - current_prompts_len);
+            }
 
             // Caller tensors hold only the delta during a continued prefill, so they are
             // indexed relative to the absolute base the continuation started at. The
@@ -1573,10 +1628,12 @@ void ov::npuw::LLMInferRequest::infer_chunked_prefill(ov::SoPtr<ov::ITensor> inp
                 copy_lincache(m_prefill_request, m_prefill_request, m_prefill_out_ports, m_prefill_in_ports);
                 m_swa_cache->update_prefill(static_cast<uint32_t>(current_prompts_len));
 
-                std::copy_n(
-                    attn_mask_in_tensor->data<int64_t>() + attn_mask_in_tensor->get_size() - current_prompts_len,
-                    current_prompts_len,
-                    attn_mask_in_tensor->data<int64_t>() + kvcache_desc.num_stored_tokens - current_prompts_len);
+                if (!m_npuw_llm_compiled_model->m_attention_mask_is_4d_float) {
+                    std::copy_n(
+                        attn_mask_in_tensor->data<int64_t>() + attn_mask_in_tensor->get_size() - current_prompts_len,
+                        current_prompts_len,
+                        attn_mask_in_tensor->data<int64_t>() + kvcache_desc.num_stored_tokens - current_prompts_len);
+                }
             }
         });
 

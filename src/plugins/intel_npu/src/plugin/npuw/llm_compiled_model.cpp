@@ -975,10 +975,17 @@ ov::npuw::LLMCompiledModel::LLMCompiledModel(const std::shared_ptr<ov::Model>& m
     m_attention_mask_is_4d_float = is_4d_float_attention_mask(model);
     if (m_attention_mask_is_4d_float) {
         LOG_INFO("Detected 4D float attention_mask contract [B, 1, Q, K] for NPUW LLM path.");
-        if (m_use_chunk_prefill) {
-            OPENVINO_THROW_NOT_IMPLEMENTED("4D float attention_mask mode does not support chunked prefill yet. "
-                                           "Please disable chunked prefill by setting NPUW_LLM_PREFILL_CHUNK_SIZE >= "
-                                           "NPUW_LLM_MAX_PROMPT_LEN or by using NPUW_LLM_PREFILL_HINT=STATIC.");
+        const auto attention_hint = m_cfg.get<::intel_npu::NPUW_LLM_PREFILL_ATTENTION_HINT>();
+        if (m_use_chunk_prefill && attention_hint != ::intel_npu::npuw::llm::AttentionHint::STATIC) {
+            // The static attention graph preserves the staged 4D mask window without Pyramid or HFA mask tiling.
+            const bool attention_hint_was_set =
+                npuw_llm_props.find("NPUW_LLM_PREFILL_ATTENTION_HINT") != npuw_llm_props.end();
+            if (attention_hint_was_set) {
+                OPENVINO_THROW_NOT_IMPLEMENTED(
+                    "4D float attention_mask chunked prefill requires NPUW_LLM_PREFILL_ATTENTION_HINT=STATIC.");
+            }
+            m_cfg.update({{"NPUW_LLM_PREFILL_ATTENTION_HINT", "STATIC"}});
+            LOG_INFO("4D float attention_mask chunked prefill: selected NPUW_LLM_PREFILL_ATTENTION_HINT=STATIC");
         }
         if (m_cfg.get<::intel_npu::NPUW_LLM_ENABLE_PREFIX_CACHING>()) {
             OPENVINO_THROW_NOT_IMPLEMENTED(
@@ -1384,6 +1391,13 @@ ov::npuw::LLMCompiledModel::LLMCompiledModel(const std::shared_ptr<ov::Model>& m
     merge_config_with(prefill_config, other_props);
     merge_config_with(generate_config, other_props);
     merge_config_with(prefill_config, prefill_config_addition_value);
+    if (m_attention_mask_is_4d_float && m_use_chunk_prefill) {
+        const auto attention_it = prefill_config.find("NPUW_ATTN");
+        if (attention_it != prefill_config.end() && attention_it->second.as<std::string>() != "STATIC") {
+            OPENVINO_THROW_NOT_IMPLEMENTED(
+                "4D float attention_mask chunked prefill requires NPUW_LLM_PREFILL_ATTENTION_HINT=STATIC.");
+        }
+    }
     // If model has multiple outputs, only logits will be extracted to a separate model.
     // Prefill will have all other outputs. It might be a wrong assumption that all of
     // them need to be sliced for, for instance, 1 token.
